@@ -1,0 +1,137 @@
+<!--
+The goal of this example is to show how to dedupe/do an EXCEPT operation of item groups based on metadata
+Additionally it shows how to normalize relative paths embedded in package metadata
+The desired result is to have the Y items override the X items if they have the same Destination path
+-->
+<Project DefaultTargets="PrintMessage">
+	<!-- Declare the X items, notice the inconsistent path directory separators -->
+	<ItemGroup>
+		<X Include="X1">
+			<Destination>the/first\path/file.txt</Destination>
+		</X>
+		<X Include="X2">
+			<Destination>the/second\path/file.txt</Destination>
+		</X>
+		<X Include="X3">
+			<Destination>the/third\path/file.txt</Destination>
+		</X>
+		<X Include="X4">
+			<Destination>the/fourth/file.txt</Destination>
+		</X>
+	</ItemGroup>
+
+	<!-- Declare the Y items. The Y1 and Y2 items should override the X1 and X2 items respectively, based on the Destination metadata -->
+	<ItemGroup>
+		<Y Include="Y1">
+			<Destination>the/first/path/file.txt</Destination>
+		</Y>
+		<Y Include="Y2">
+			<Destination>the/second/path/file.txt</Destination>
+		</Y>
+		<Y Include="Y3">
+			<Destination>the/fifth/path/file.txt</Destination>
+		</Y>
+	</ItemGroup>
+
+	<!--
+	Target to operate on the X and Y item groups
+	The X and Y item groups are currently defined outside of a target, however there is no difference if they are declared in a target
+	However, the logic below must be declared in a target in order to use non-standard metadata (Destination) AND to call the ConvertToAbsolutePath tasks
+	-->
+	<Target Name="XExceptY" BeforeTargets="PrintMessage">
+
+		<!--
+		Transform the X and Y item groups so that the Destination metadata is the Identity of the item, however preserve
+		the original Identity metadata of the item so that it can be related back to the original X and Y item groups
+		-->
+		<ItemGroup>
+			<_XPath Include="@(X->'%(Destination)')">
+				<LinkedIdentity>%(Identity)</LinkedIdentity>
+			</_XPath>
+
+			<_YPath Include="@(Y->'%(Destination)')">
+				<LinkedIdentity>%(Identity)</LinkedIdentity>
+			</_YPath>
+		</ItemGroup>
+
+		<!--
+		In order to deal with inconsistencies between using the / and \ path separators, we're going to run the "Destination" metadata value through
+		the ConvertToAbsolutePath function, however this function can only be applied to an item's identity, hence the transformation above
+
+		?? Note: It seems that the metadata of the original item is preserved even after passing through the ConvertToAbsolutePath function
+		-->
+		<ConvertToAbsolutePath Paths="@(_XPath)">
+			<Output TaskParameter="AbsolutePaths" ItemName="_XAbsolutePath" />
+		</ConvertToAbsolutePath>
+
+		<ConvertToAbsolutePath Paths="@(_YPath)">
+			<Output TaskParameter="AbsolutePaths" ItemName="_YAbsolutePath" />
+		</ConvertToAbsolutePath>
+
+
+		<!--
+		Calculate the result of "X" EXCEPT "Y" by taking advantage of batching in the Condition statement, information on this logic can be found below
+		https://blogs.msdn.microsoft.com/msbuild/2006/05/18/what-does-this-msbuild-snippet-do/
+		https://blogs.msdn.microsoft.com/msbuild/2006/05/30/batching-brainteaser-explained/
+
+		Note: The transformation in the Include statement, @(_XAbsolutePath->'%(LinkedIdentity)'), is done as a shortcut to avoid having to make another
+		translational itemgroup afterwards in order to flip the results back around. The MatchedValue is added just to show/preserve what the matched value
+		between _XAbsolutePath and _YAbsolutePath was. This was done just for show/logging below (due to the transformation), it is NOT required for the EXCEPT
+		logic to work.
+		-->
+		<ItemGroup>
+			<_XPathToRemove Include="@(_XAbsolutePath->'%(LinkedIdentity)')" Condition="'%(Identity)' != '' AND '@(_XAbsolutePath)' != '' AND '@(_YAbsolutePath)' != ''">
+				<MatchedValue>%(Identity)</MatchedValue>
+			</_XPathToRemove>
+		</ItemGroup>
+
+		<!--
+		Finally, use the results of the "X EXCEPT Y" operation to generate a new set of items that only contain the deduped X values
+		Additionally, an item group with the full results of "X EXCEPT Y" has been created
+		-->
+		<ItemGroup>
+			<RemainingX Include="@(X)" Exclude="@(_XPathToRemove)" />
+
+			<FinalXYSubset Include="@(RemainingX);@(Y)">
+				<Destination>%(Destination)</Destination>
+			</FinalXYSubset>
+		</ItemGroup>
+	</Target>
+
+
+	<!-- Print the results of all the item groups, this is done in a separate target (declared as the projects default target) just to simulate a build target or other operation -->
+	<Target Name="PrintMessage">
+
+		<Message Text="Original X,Y Items" Importance="High" />
+		<Message Text="  [Identity] -> [Destination]" Importance="High" />
+		<Message Text="  %(X.Identity) -> %(X.Destination)" Importance="High" />
+		<Message Text="  %(Y.Identity) -> %(Y.Destination)" Importance="High" />
+		<Message Text=" " Importance="High" />
+
+		<Message Text="X and Y Items Transformed to _XPath and _YPath" Importance="High" />
+		<Message Text="  [Identity] -> [LinkedIdentity]" Importance="High" />
+		<Message Text="  %(_XPath.Identity) -> %(_XPath.LinkedIdentity)" Importance="High" />
+		<Message Text="  %(_YPath.Identity) -> %(_YPath.LinkedIdentity)" Importance="High" />
+		<Message Text=" " Importance="High" />
+
+		<Message Text="_XPath and _YPath Items Converted to _XAbsolutePath and _YAbsolutePath" Importance="High" />
+		<Message Text="  [Identity] -> [LinkedIdentity]" Importance="High" />
+		<Message Text="  %(_XAbsolutePath.Identity) -> %(_XAbsolutePath.LinkedIdentity)" Importance="High" />
+		<Message Text="  %(_YAbsolutePath.Identity) -> %(_YAbsolutePath.LinkedIdentity)" Importance="High" />
+		<Message Text=" " Importance="High" />
+
+		<Message Text="Results of '_XAbsolutePath EXCEPT _YAbsolutePath' and Reverse Metadata Transformation (_XPathToRemove)" Importance="High" />
+		<Message Text="  [Identity] -> [Destination] -> [MatchedValue]" Importance="High" />
+		<Message Text="  %(_XPathToRemove.Identity) -> %(_XPathToRemove.Destination) -> %(_XPathToRemove.MatchedValue)" Importance="High" />
+		<Message Text=" " Importance="High" />
+
+		<Message Text="The RemainingX items" Importance="High" />
+		<Message Text="  [Identity] -> [Destination]" Importance="High" />
+		<Message Text="  %(RemainingX.Identity) -> %(RemainingX.Destination)" Importance="High" />
+		<Message Text=" " Importance="High" />
+
+		<Message Text="FinalXYSubset Items" Importance="High" />
+		<Message Text="  [Identity] -> [Destination]" Importance="High" />
+		<Message Text="  %(FinalXYSubset.Identity) -> %(FinalXYSubset.Destination)" Importance="High" />
+	</Target>
+</Project>
